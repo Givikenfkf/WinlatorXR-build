@@ -1,0 +1,61 @@
+name: Build WinlatorXRBridge (Windows x64)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '7.0.x'
+
+    - name: Restore & build C# plugin
+      working-directory: src/WinlatorXRBridge
+      run: |
+        if [ -f WinlatorXRBridge.csproj ]; then
+          dotnet build -c Release -r win-x64 --no-self-contained
+        else
+          echo "No csproj detected - skipping dotnet build."
+        fi
+
+    - name: Prepare artifacts dir
+      run: mkdir -p artifacts
+
+    - name: Compile openvr_api_shim.cpp with cl.exe
+      shell: pwsh
+      run: |
+        $vcvars = 'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
+        if (-Not (Test-Path $vcvars)) {
+          $vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
+        }
+        & cmd.exe /c "`"$vcvars`" && cl /LD /O2 src\openvr_shim\openvr_api_shim.cpp /Fe:artifacts\openvr_api.dll" 
+        if ($LASTEXITCODE -ne 0) { Write-Error "C++ compile failed"; exit 1 }
+
+    - name: Collect built C# DLLs
+      shell: pwsh
+      run: |
+        $found = Get-ChildItem -Path src -Recurse -Filter WinlatorXRBridge.dll -ErrorAction SilentlyContinue
+        if ($found) {
+          foreach ($f in $found) { Copy-Item $f.FullName -Destination artifacts -Force }
+        } else {
+          Write-Host "No C# DLLs found by msbuild fallback."
+        }
+
+    - name: List artifacts
+      run: dir artifacts
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: winlatorxr-build-artifacts
+        path: artifacts
